@@ -1,0 +1,305 @@
+
+;; TODO:
+;; implement 'empty?' for Socket
+
+
+(add-ns st (module "core/stream.toc"))
+
+(inline-text "#include <netdb.h>")
+(inline-text "#include <sys/socket.h>")
+(inline-text "#include <arpa/inet.h>")
+
+(inline-text "#include <errno.h>")
+(inline-text "#include <string.h>")
+
+(inline-text "
+
+typedef struct {
+  int sockfd;
+  int closed;} socketStruct;
+
+void close_socket(void *ptr) {
+  socketStruct *sock = (socketStruct *)ptr;
+  close(sock->sockfd);
+  free(sock);
+  atomic_fetch_add(&free_count, 1);
+}
+")
+
+(defn wont-block [socket]
+  ;; TODO: implement this
+  nothing)
+
+(defn listen-for-connection [port-str backlog]
+  ;; private function. Use 'listen' instead
+  (inline-text Maybe "
+  struct addrinfo hints, *res;
+  int sockfd;
+
+  // first, load up address structs with getaddrinfo():
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC;  // use IPv4 or IPv6, whichever
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
+
+  int rv;
+  if ((rv = getaddrinfo(NULL, ((String *)arg0)->buffer, &hints, &res)) != 0)
+    return(nothing);
+  else if ((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1) {
+    freeaddrinfo(res);
+    return(nothing);
+  } else if(bind(sockfd, res->ai_addr, res->ai_addrlen) == -1 ||
+            listen(sockfd, ((Number *)arg1)->numVal) == -1) {
+    close(sockfd);
+    freeaddrinfo(res);
+    return(nothing);
+  } else {
+    socketStruct *sock = (socketStruct *)my_malloc(sizeof(socketStruct));
+    sock->sockfd = sockfd;
+    sock->closed = 0;
+    Value *opaque = opaqueValue(sock, close_socket);
+    Value *mo = maybe((List *)0, (Value *)0, opaque);
+    dec_and_free(opaque);
+    return(mo);
+  }
+"))
+
+(defn accept* [socket]
+  (inline-text Maybe "
+  struct sockaddr_storage their_addr;
+  socklen_t addr_size = sizeof their_addr;
+  int new_fd;
+  socketStruct *socket = (socketStruct *)((Opaque *)arg0)->ptr;
+  if ((new_fd = accept(socket->sockfd, (struct sockaddr *)&their_addr, &addr_size)) == -1)
+    return(nothing);
+  else {
+    socketStruct *sock = (socketStruct *)my_malloc(sizeof(socketStruct));
+    sock->sockfd = new_fd;
+    sock->closed = 0;
+    Value *opaque = opaqueValue(sock, close_socket);
+    Value *mo = maybe((List *)0, (Value *)0, opaque);
+    dec_and_free(opaque);
+    return(mo);
+  }
+"))
+
+(defn connect-to-server [host port]
+  ;; private function. Use 'connect' instead
+  (inline-text Maybe "
+  char *host_name = (char *)0;
+  if (arg0->type == StringType) {
+    host_name = malloc(((String *)arg0)->len + 1);
+    if (host_name == (char *)0) {
+      fprintf(stderr, \"Out of memory!!!!\\n\");
+      abort();
+    }
+    snprintf(host_name, ((String *)arg0)->len + 1, \"%s\", ((String *)arg0)->buffer);
+  } else if (arg0->type == SubStringType) {
+    host_name = malloc(((SubString *)arg0)->len + 1);
+    if (host_name == (char *)0) {
+      fprintf(stderr, \"Out of memory!!!!\\n\");
+      abort();
+    }
+    snprintf(host_name, ((SubString *)arg0)->len + 1, \"%s\", ((SubString *)arg0)->buffer);
+  } else {
+    fprintf(stderr, \"Invalid parameter passed to 'get-host-addr'\\n\");
+    abort();
+  }
+
+  char *host_port = (char *)0;
+  if (arg1->type == StringType) {
+    host_port = malloc(((String *)arg1)->len + 1);
+    if (host_port == (char *)0) {
+      fprintf(stderr, \"Out of memory!!!!\\n\");
+      abort();
+    }
+    snprintf(host_port, ((String *)arg1)->len + 1, \"%s\", ((String *)arg1)->buffer);
+  } else if (arg1->type == SubStringType) {
+    host_port = malloc(((SubString *)arg1)->len + 1);
+    if (host_port == (char *)0) {
+      fprintf(stderr, \"Out of memory!!!!\\n\");
+      abort();
+    }
+    snprintf(host_port, ((SubString *)arg1)->len + 1, \"%s\", ((SubString *)arg1)->buffer);
+  } else {
+    fprintf(stderr, \"Invalid parameter passed to 'get-host-addr'\\n\");
+    abort();
+  }
+
+  int sockfd;
+  struct addrinfo hints, *servinfo, *p;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC; // use AF_INET6 to force IPv6
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_CANONNAME;
+
+  int rv;
+  if ((rv = getaddrinfo(host_name, host_port, &hints, &servinfo)) != 0) {
+    return(nothing);
+  } else {
+    // loop through all the results and connect to the first we can
+    for(p = servinfo; p != NULL; p = p->ai_next) {
+        if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
+            continue;
+        }
+
+        if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+          continue;
+        }
+
+        freeaddrinfo(servinfo);
+
+        socketStruct *sock = (socketStruct *)my_malloc(sizeof(socketStruct));
+        sock->sockfd = sockfd;
+        sock->closed = 0;
+        Value *opaque = opaqueValue(sock, close_socket);
+        Value *mo = maybe((List *)0, (Value *)0, opaque);
+        dec_and_free(opaque);
+        return(mo);
+    }
+
+    freeaddrinfo(servinfo);
+    return(nothing);
+  }
+"))
+
+(defn getpeername [sock]
+  ;; private function. Use 'peer' instead
+  (inline-text Maybe "
+  socklen_t len;
+  struct sockaddr_storage addr;
+  char ipstr[INET6_ADDRSTRLEN];
+  int port;
+
+  len = sizeof addr;
+  socketStruct *socket = (socketStruct *)((Opaque *)arg0)->ptr;
+  int result = getpeername(socket->sockfd, (struct sockaddr*)&addr, &len);
+  if (result == -1)
+    return(nothing);
+
+  // deal with both IPv4 and IPv6:
+  if (addr.ss_family == AF_INET) {
+    struct sockaddr_in *s = (struct sockaddr_in *)&addr;
+    port = ntohs(s->sin_port);
+    inet_ntop(AF_INET, &s->sin_addr, ipstr, sizeof ipstr);
+  } else { // AF_INET6
+    struct sockaddr_in6 *s = (struct sockaddr_in6 *)&addr;
+    port = ntohs(s->sin6_port);
+    inet_ntop(AF_INET6, &s->sin6_addr, ipstr, sizeof ipstr);
+  }
+
+// TODO: see if this leaks malloc's
+  List *portal = listCons(numberValue(port), empty_list);
+  List *ipAddr = listCons(stringValue(ipstr), portal);
+  Maybe *final = (Maybe *)maybe((List *)0, (Value *)0, (Value *)ipAddr);
+  return((Value *)final);
+"))
+
+(defn read* [sock]
+  ;; private function. Use 'extract' instead
+  (inline-text String "
+  socketStruct *socket = (socketStruct *)((Opaque *)arg0)->ptr;
+  if (socket->closed > 0)
+    return((Value *)malloc_string(0));
+
+// TODO: Figure out how to have a new type of network buffer to avoid extra copy operation
+  char buffer[1000];
+  int64_t byte_count = recv(socket->sockfd, buffer, 1000, 0);
+  if (byte_count <= 0) {
+    socket->closed = 1;
+    return((Value *)malloc_string(0));
+  } else {
+    String *strVal = malloc_string(byte_count);
+    strncpy(strVal->buffer, buffer, byte_count);
+    return((Value *)strVal);
+  }
+"))
+
+(defn write* [socket message]
+  (inline-text Number "
+  socketStruct *socket = (socketStruct *)((Opaque *)arg0)->ptr;
+  if (socket->closed) {
+    return(numberValue(0));
+  } else if (arg1->type == StringType) {
+    String *s = (String *)arg1;
+    int64_t bytesSent = send(socket->sockfd, s->buffer, s->len, 0);
+    return(numberValue(bytesSent));
+  }
+  else if (arg1->type == SubStringType) {
+    SubString *s = (SubString *)arg1;
+    return(numberValue(send(socket->sockfd, s->buffer, s->len, 0)));
+  }
+  else {
+    fprintf(stderr, \"\\ninvalid message type for TCP 'write'\\n\");
+    abort();
+  }
+"))
+
+(defn socket-closed? [socket]
+(inline-text Maybe "
+  socketStruct *socket = (socketStruct *)((Opaque *)arg0)->ptr;
+  if (socket->closed == 0) {
+    return(nothing);
+  } else {
+    return(maybe((List *)0, (Value *)0, (Value *)nothing));
+  }
+"))
+
+(defprotocol SocketProto
+  (write [_ msg])
+  (peer [_])
+  (read [_]))
+
+(deftype Socket [socket]
+  Stringable
+  (string-list [_] (list "<Socket>"))
+
+  Collection
+  (empty? [_]
+    (socket-closed? socket))
+
+  Container
+  (extract [_]
+    (read* socket))
+
+  SocketProto
+  (write [_ msg]
+    (write* socket msg))
+  (peer [_]
+    (for [[host port] (getpeername socket)]
+      {:host host :port port}))
+  (read [_] (and (wont-block socket)
+                 (extract socket))))
+
+(defprotocol ServerProto
+  (accept [_])
+  (blocking-accept [_]))
+
+(deftype ServerSocket [socket]
+  Stringable
+  (string-list [_] (list "<ServerSocket>"))
+
+  ServerProto
+  (blocking-accept [_] (accept* socket))
+  (accept [_] (and (wont-block socket)
+                   (blocking-accept socket))))
+
+;; external API
+
+(defn connect [host port]
+  (for [sock (connect-to-server (str host) (str port))]
+    (Socket sock)))
+
+(defn listen
+  ([port] (map (listen-for-connection (number-str port) 10)
+               ServerSocket))
+  ([port backlog] (map (listen-for-connection (number-str port) backlog)
+                       ServerSocket)))
+
+(defn server
+  ([handler-fn port] (server handler-fn port 10))
+  ([handler-fn port backlog]
+   (for [socket (listen port backlog)]
+     (map (st/stream socket blocking-accept identity (constantly nothing))
+          (fn [tcp-socket]
+            (handler-fn (Socket tcp-socket)))))))
