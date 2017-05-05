@@ -1,15 +1,15 @@
 
 (add-ns st (git-dependency "github.com:jduey/stream.git" "stream.toc"))
 
-(inline-text "#include <netdb.h>")
-(inline-text "#include <sys/socket.h>")
-(inline-text "#include <arpa/inet.h>")
+(inline-C "#include <netdb.h>")
+(inline-C "#include <sys/socket.h>")
+(inline-C "#include <arpa/inet.h>")
 
-(inline-text "#include <errno.h>")
-(inline-text "#include <string.h>")
-(inline-text "#include <unistd.h>")
+(inline-C "#include <errno.h>")
+(inline-C "#include <string.h>")
+(inline-C "#include <unistd.h>")
 
-(inline-text "
+(inline-C "
 
 typedef struct {
   int sockfd;
@@ -29,7 +29,7 @@ void close_socket(void *ptr) {
 
 (defn listen-for-connection [port-str backlog]
   ;; private function. Use 'listen' instead
-  (inline-text Maybe "
+  (inline-C Maybe "
   struct addrinfo hints, *res;
   int sockfd;
 
@@ -44,11 +44,15 @@ void close_socket(void *ptr) {
     return(nothing);
   else if ((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1) {
     freeaddrinfo(res);
+    dec_and_free(arg0, 1);
+    dec_and_free(arg1, 1);
     return(nothing);
   } else if(bind(sockfd, res->ai_addr, res->ai_addrlen) == -1 ||
             listen(sockfd, ((Number *)arg1)->numVal) == -1) {
     close(sockfd);
     freeaddrinfo(res);
+    dec_and_free(arg0, 1);
+    dec_and_free(arg1, 1);
     return(nothing);
   } else {
     socketStruct *sock = (socketStruct *)my_malloc(sizeof(socketStruct));
@@ -56,33 +60,35 @@ void close_socket(void *ptr) {
     sock->closed = 0;
     Value *opaque = opaqueValue(sock, close_socket);
     Value *mo = maybe((List *)0, (Value *)0, opaque);
-    dec_and_free(opaque);
+    dec_and_free(arg0, 1);
+    dec_and_free(arg1, 1);
     return(mo);
   }
 "))
 
 (defn accept* [socket]
-  (inline-text Maybe "
+  (inline-C Maybe "
   struct sockaddr_storage their_addr;
   socklen_t addr_size = sizeof their_addr;
   int new_fd;
   socketStruct *socket = (socketStruct *)((Opaque *)arg0)->ptr;
-  if ((new_fd = accept(socket->sockfd, (struct sockaddr *)&their_addr, &addr_size)) == -1)
+  if ((new_fd = accept(socket->sockfd, (struct sockaddr *)&their_addr, &addr_size)) == -1) {
+    dec_and_free(arg0, 1);
     return(nothing);
-  else {
+  } else {
     socketStruct *sock = (socketStruct *)my_malloc(sizeof(socketStruct));
     sock->sockfd = new_fd;
     sock->closed = 0;
     Value *opaque = opaqueValue(sock, close_socket);
     Value *mo = maybe((List *)0, (Value *)0, opaque);
-    dec_and_free(opaque);
+    dec_and_free(arg0, 1);
     return(mo);
   }
 "))
 
 (defn connect-to-server [host port]
   ;; private function. Use 'connect' instead
-  (inline-text Maybe "
+  (inline-C Maybe "
   char *host_name = (char *)0;
   if (arg0->type == StringType) {
     host_name = malloc(((String *)arg0)->len + 1);
@@ -132,6 +138,8 @@ void close_socket(void *ptr) {
 
   int rv;
   if ((rv = getaddrinfo(host_name, host_port, &hints, &servinfo)) != 0) {
+    dec_and_free(arg0, 1);
+    dec_and_free(arg1, 1);
     return(nothing);
   } else {
     // loop through all the results and connect to the first we can
@@ -151,18 +159,21 @@ void close_socket(void *ptr) {
         sock->closed = 0;
         Value *opaque = opaqueValue(sock, close_socket);
         Value *mo = maybe((List *)0, (Value *)0, opaque);
-        dec_and_free(opaque);
+        dec_and_free(arg0, 1);
+        dec_and_free(arg1, 1);
         return(mo);
     }
 
     freeaddrinfo(servinfo);
+    dec_and_free(arg0, 1);
+    dec_and_free(arg1, 1);
     return(nothing);
   }
 "))
 
 (defn getpeername [sock]
   ;; private function. Use 'peer' instead
-  (inline-text Maybe "
+  (inline-C Maybe "
   socklen_t len;
   struct sockaddr_storage addr;
   char ipstr[INET6_ADDRSTRLEN];
@@ -171,8 +182,10 @@ void close_socket(void *ptr) {
   len = sizeof addr;
   socketStruct *socket = (socketStruct *)((Opaque *)arg0)->ptr;
   int result = getpeername(socket->sockfd, (struct sockaddr*)&addr, &len);
-  if (result == -1)
+  if (result == -1) {
+    dec_and_free(arg0, 1);
     return(nothing);
+  }
 
   // deal with both IPv4 and IPv6:
   if (addr.ss_family == AF_INET) {
@@ -189,41 +202,52 @@ void close_socket(void *ptr) {
   List *portal = listCons(numberValue(port), empty_list);
   List *ipAddr = listCons(stringValue(ipstr), portal);
   Maybe *final = (Maybe *)maybe((List *)0, (Value *)0, (Value *)ipAddr);
+  dec_and_free(arg0, 1);
   return((Value *)final);
 "))
 
 (defn read* [sock]
   ;; private function. Use 'extract' instead
-  (inline-text String "
+  (inline-C String "
   socketStruct *socket = (socketStruct *)((Opaque *)arg0)->ptr;
-  if (socket->closed > 0)
+  if (socket->closed > 0) {
+    dec_and_free(arg0, 1);
     return((Value *)malloc_string(0));
+  }
 
 // TODO: Figure out how to have a new type of network buffer to avoid extra copy operation
   char buffer[1000];
   int64_t byte_count = recv(socket->sockfd, buffer, 1000, 0);
   if (byte_count <= 0) {
     socket->closed = 1;
+    dec_and_free(arg0, 1);
     return((Value *)malloc_string(0));
   } else {
     String *strVal = malloc_string(byte_count);
     strncpy(strVal->buffer, buffer, byte_count);
+    dec_and_free(arg0, 1);
     return((Value *)strVal);
   }
 "))
 
 (defn write* [socket message]
-  (inline-text Number "
+  (inline-C Number "
   socketStruct *socket = (socketStruct *)((Opaque *)arg0)->ptr;
   if (socket->closed) {
+    dec_and_free(arg0, 1);
+    dec_and_free(arg1, 1);
     return(numberValue(0));
   } else if (arg1->type == StringType) {
     String *s = (String *)arg1;
     int64_t bytesSent = send(socket->sockfd, s->buffer, s->len, 0);
+    dec_and_free(arg0, 1);
+    dec_and_free(arg1, 1);
     return(numberValue(bytesSent));
   }
   else if (arg1->type == SubStringType) {
     SubString *s = (SubString *)arg1;
+    dec_and_free(arg0, 1);
+    dec_and_free(arg1, 1);
     return(numberValue(send(socket->sockfd, s->buffer, s->len, 0)));
   }
   else {
@@ -233,11 +257,13 @@ void close_socket(void *ptr) {
 "))
 
 (defn socket-closed? [socket]
-(inline-text Maybe "
+(inline-C Maybe "
   socketStruct *socket = (socketStruct *)((Opaque *)arg0)->ptr;
   if (socket->closed == 0) {
+    dec_and_free(arg0, 1);
     return(nothing);
   } else {
+    dec_and_free(arg0, 1);
     return(maybe((List *)0, (Value *)0, (Value *)nothing));
   }
 "))
