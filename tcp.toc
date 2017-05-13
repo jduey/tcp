@@ -302,10 +302,18 @@ void close_socket(void *ptr) {
   Stringable
   (string-list [_] (list "<ServerSocket>"))
 
+  Container
+  (extract [_]
+    (map (accept* socket) Socket))
+
   ServerProto
   (blocking-accept [_] (accept* socket))
   (accept [_] (and (wont-block socket)
                    (blocking-accept socket))))
+
+(defn handle-connections [handler-fn server-socket]
+  (and (map (extract server-socket) handler-fn)
+       (handle-connections handler-fn server-socket)))
 
 ;; external API
 
@@ -314,17 +322,11 @@ void close_socket(void *ptr) {
     (Socket sock)))
 
 (defn listen
-  ([port] (map (listen-for-connection (number-str port) 10)
-               (fn [s]
-                 (map (st/stream (ServerSocket s) blocking-accept identity (constantly nothing))
-                      Socket))))
-  ([port backlog] (map (listen-for-connection (number-str port) backlog)
-                       (fn [s]
-                         (st/stream (ServerSocket s) blocking-accept identity (constantly nothing))))))
+  ([port] (map (listen-for-connection (number-str port) 10) ServerSocket))
+  ([port backlog] (map (listen-for-connection (number-str port) backlog) ServerSocket)))
 
 (defn server
-  ([handler-fn port] (server handler-fn port 10))
+  ([handler-fn port]
+   (map (tcp/listen port) (partial handle-connections handler-fn)))
   ([handler-fn port backlog]
-   (for [socket-stream (listen port backlog)]
-     (map socket-stream (fn [tcp-socket]
-                          (handler-fn (Socket tcp-socket)))))))
+   (map (tcp/listen port backlog) (partial handle-connections handler-fn))))
