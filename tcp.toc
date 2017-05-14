@@ -1,13 +1,13 @@
 
 (add-ns st (git-dependency "github.com:jduey/stream.git" "stream.toc"))
 
-(inline-C "#include <netdb.h>")
-(inline-C "#include <sys/socket.h>")
-(inline-C "#include <arpa/inet.h>")
+(inline-C "\n#include <netdb.h>\n")
+(inline-C "\n#include <sys/socket.h>\n")
+(inline-C "\n#include <arpa/inet.h>\n")
 
-(inline-C "#include <errno.h>")
-(inline-C "#include <string.h>")
-(inline-C "#include <unistd.h>")
+(inline-C "\n#include <errno.h>\n")
+(inline-C "\n#include <string.h>\n")
+(inline-C "\n#include <unistd.h>\n")
 
 (inline-C "
 
@@ -312,8 +312,8 @@ void close_socket(void *ptr) {
                    (blocking-accept socket))))
 
 (defn handle-connections [handler-fn server-socket]
-  (and (map (extract server-socket) handler-fn)
-       (handle-connections handler-fn server-socket)))
+  (map (extract server-socket) handler-fn)
+  (handle-connections handler-fn server-socket))
 
 ;; external API
 
